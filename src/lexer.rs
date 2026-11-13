@@ -3,6 +3,8 @@ pub enum Token {
     Number(f64),
     StringLit(String),
     Identifier(String),
+    /// Raw items of a `DATA` statement: `(text, was_quoted)`.
+    DataItems(Vec<(String, bool)>),
     Print,
     Let,
     Input,
@@ -88,6 +90,9 @@ pub enum Token {
     On,
     Error,
     Resume,
+    Using,
+    Write,
+    Kill,
     Mod,
     And,
     Or,
@@ -119,397 +124,455 @@ pub enum Token {
     Eof,
 }
 
+/// Tokenize BASIC source.
+///
+/// Every physical source line produces exactly one `Token::Newline`, so the
+/// parser can recover 1-based line numbers by counting them.
 pub fn tokenize(input: &str) -> Result<Vec<Token>, String> {
     let mut tokens = Vec::new();
     let mut chars = Vec::new();
-    for raw_line in input.lines() {
-        let line = raw_line.trim_end();
-        if line.trim().is_empty() {
-            tokens.push(Token::Newline);
-            continue;
-        }
+    for (line_idx, raw_line) in input.lines().enumerate() {
         chars.clear();
-        chars.extend(line.chars());
-        let mut i = 0;
-        let mut at_line_start = true;
-        while i < chars.len() {
-            let c = chars[i];
-            if c == ' ' || c == '\t' {
-                i += 1;
-                continue;
-            }
-            if at_line_start && c.is_ascii_digit() {
-                let start = i;
-                while i < chars.len() && chars[i].is_ascii_digit() {
-                    i += 1;
-                }
-                let s: String = chars[start..i].iter().collect();
-                let n: u32 = s.parse().map_err(|e| format!("Bad line number: {}", e))?;
-                tokens.push(Token::LineNumber(n));
-                at_line_start = false;
-                continue;
-            }
-            at_line_start = false;
-            if c == '\'' {
-                break;
-            }
-            if c == '#' {
-                tokens.push(Token::Hash);
-                i += 1;
-                continue;
-            }
-            if c.is_ascii_digit()
-                || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
-            {
-                let start = i;
-                let mut saw_dot = false;
-                while i < chars.len()
-                    && (chars[i].is_ascii_digit() || (chars[i] == '.' && !saw_dot))
-                {
-                    if chars[i] == '.' {
-                        saw_dot = true;
-                    }
-                    i += 1;
-                }
-                let s: String = chars[start..i].iter().collect();
-                let n: f64 = s
-                    .parse()
-                    .map_err(|e| format!("Bad number '{}': {}", s, e))?;
-                tokens.push(Token::Number(n));
-                continue;
-            }
-            if c == '"' {
-                i += 1;
-                let start = i;
-                while i < chars.len() && chars[i] != '"' {
-                    i += 1;
-                }
-                if i >= chars.len() {
-                    return Err("Unterminated string".to_string());
-                }
-                let s: String = chars[start..i].iter().collect();
-                i += 1;
-                tokens.push(Token::StringLit(s));
-                continue;
-            }
-            if c.is_ascii_alphabetic() || c == '_' {
-                let start = i;
-                while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
-                    i += 1;
-                }
-                if i < chars.len()
-                    && (chars[i] == '$'
-                        || chars[i] == '%'
-                        || chars[i] == '!'
-                        || chars[i] == '#'
-                        || chars[i] == '&')
-                {
-                    i += 1;
-                }
-                let word: String = chars[start..i].iter().collect();
-                let upper = word.to_uppercase();
-                if upper == "REM" {
-                    break;
-                }
-                let is_label_candidate = i < chars.len() && chars[i] == ':' && !is_keyword(&upper);
-                if is_label_candidate {
-                    i += 1;
-                    tokens.push(Token::Label(upper)); // OPTIMIZATION: Stored as uppercase
-                    continue;
-                }
-                match upper.as_str() {
-                    "PRINT" => tokens.push(Token::Print),
-                    "LET" => tokens.push(Token::Let),
-                    "INPUT" => tokens.push(Token::Input),
-                    "IF" => tokens.push(Token::If),
-                    "THEN" => tokens.push(Token::Then),
-                    "ELSE" => tokens.push(Token::Else),
-                    "ELSEIF" => tokens.push(Token::ElseIf),
-                    "ENDIF" => tokens.push(Token::EndIf),
-                    "FOR" => tokens.push(Token::For),
-                    "TO" => tokens.push(Token::To),
-                    "STEP" => tokens.push(Token::Step),
-                    "NEXT" => tokens.push(Token::Next),
-                    "WHILE" => tokens.push(Token::While),
-                    "WEND" => tokens.push(Token::Wend),
-                    "DO" => tokens.push(Token::Do),
-                    "LOOP" => tokens.push(Token::Loop),
-                    "UNTIL" => tokens.push(Token::Until),
-                    "GOTO" => tokens.push(Token::Goto),
-                    "GOSUB" => tokens.push(Token::Gosub),
-                    "RETURN" => tokens.push(Token::Return),
-                    "DIM" => tokens.push(Token::Dim),
-                    "DATA" => tokens.push(Token::Data),
-                    "READ" => tokens.push(Token::Read),
-                    "RESTORE" => tokens.push(Token::Restore),
-                    "REDIM" => tokens.push(Token::Redim),
-                    "PRESERVE" => tokens.push(Token::Preserve),
-                    "ERASE" => tokens.push(Token::Erase),
-                    "AS" => tokens.push(Token::As),
-                    "INTEGER" => tokens.push(Token::Integer),
-                    "LONG" => tokens.push(Token::Long),
-                    "SINGLE" => tokens.push(Token::Single),
-                    "DOUBLE" => tokens.push(Token::Double),
-                    "STRING" => tokens.push(Token::StringKw),
-                    "SUB" => tokens.push(Token::Sub),
-                    "FUNCTION" => tokens.push(Token::Function),
-                    "CALL" => tokens.push(Token::Call),
-                    "DECLARE" => tokens.push(Token::Declare),
-                    "EXIT" => tokens.push(Token::Exit),
-                    "BYREF" => tokens.push(Token::ByRef),
-                    "BYVAL" => tokens.push(Token::ByVal),
-                    "SHARED" => tokens.push(Token::Shared),
-                    "STATIC" => tokens.push(Token::Static),
-                    "CONST" => tokens.push(Token::Const),
-                    "TYPE" => tokens.push(Token::Type),
-                    "OPTION" => tokens.push(Token::Option),
-                    "BASE" => tokens.push(Token::Base),
-                    "DEFINT" => tokens.push(Token::DefInt),
-                    "DEFLNG" => tokens.push(Token::DefLng),
-                    "DEFSNG" => tokens.push(Token::DefSng),
-                    "DEFDBL" => tokens.push(Token::DefDbl),
-                    "DEFSTR" => tokens.push(Token::DefStr),
-                    "SELECT" => tokens.push(Token::Select),
-                    "CASE" => tokens.push(Token::Case),
-                    "IS" => tokens.push(Token::Is),
-                    "OPEN" => tokens.push(Token::Open),
-                    "CLOSE" => tokens.push(Token::Close),
-                    "OUTPUT" => tokens.push(Token::Output),
-                    "APPEND" => tokens.push(Token::Append),
-                    "RANDOM" => tokens.push(Token::Random),
-                    "GET" => tokens.push(Token::Get),
-                    "PUT" => tokens.push(Token::Put),
-                    "LEN" => tokens.push(Token::LenKw),
-                    "SCREEN" => tokens.push(Token::Screen),
-                    "LINE" => tokens.push(Token::Line),
-                    "CIRCLE" => tokens.push(Token::Circle),
-                    "PSET" => tokens.push(Token::Pset),
-                    "COLOR" => tokens.push(Token::Color),
-                    "CLS" => tokens.push(Token::Cls),
-                    "WINDOW" => tokens.push(Token::Window),
-                    "PAINT" => tokens.push(Token::Paint),
-                    "LOCATE" => tokens.push(Token::Locate),
-                    "BEEP" => tokens.push(Token::Beep),
-                    "SWAP" => tokens.push(Token::Swap),
-                    "CLEAR" => tokens.push(Token::Clear),
-                    "STOP" => tokens.push(Token::Stop),
-                    "SYSTEM" => tokens.push(Token::System),
-                    "ON" => tokens.push(Token::On),
-                    "ERROR" => tokens.push(Token::Error),
-                    "RESUME" => tokens.push(Token::Resume),
-                    "MOD" => tokens.push(Token::Mod),
-                    "AND" => tokens.push(Token::And),
-                    "OR" => tokens.push(Token::Or),
-                    "NOT" => tokens.push(Token::Not),
-                    "XOR" => tokens.push(Token::Xor),
-                    "RANDOMIZE" => tokens.push(Token::Randomize),
-                    "SLEEP" => tokens.push(Token::Sleep),
-                    "END" => {
-                        let mut j = i;
-                        while j < chars.len() && (chars[j] == ' ' || chars[j] == '\t') {
-                            j += 1;
-                        }
-                        let rest: String = chars[j..].iter().collect();
-                        let rest_upper = rest.to_uppercase();
-                        let after_ok = |off: usize| {
-                            j + off >= chars.len() || !chars[j + off].is_ascii_alphanumeric()
-                        };
-                        if rest_upper.starts_with("IF") && after_ok(2) {
-                            i = j + 2;
-                            tokens.push(Token::EndIf);
-                        } else if rest_upper.starts_with("SUB") && after_ok(3) {
-                            i = j + 3;
-                            tokens.push(Token::EndSub);
-                        } else if rest_upper.starts_with("FUNCTION") && after_ok(8) {
-                            i = j + 8;
-                            tokens.push(Token::EndFunction);
-                        } else if rest_upper.starts_with("TYPE") && after_ok(4) {
-                            i = j + 4;
-                            tokens.push(Token::EndType);
-                        } else if rest_upper.starts_with("SELECT") && after_ok(6) {
-                            i = j + 6;
-                            tokens.push(Token::EndSelect);
-                        } else {
-                            tokens.push(Token::End);
-                        }
-                    }
-                    _ => tokens.push(Token::Identifier(upper)), // OPTIMIZATION: Stored as uppercase
-                }
-                continue;
-            }
-            match c {
-                '=' => {
-                    tokens.push(Token::Equals);
-                    i += 1;
-                }
-                '+' => {
-                    tokens.push(Token::Plus);
-                    i += 1;
-                }
-                '-' => {
-                    tokens.push(Token::Minus);
-                    i += 1;
-                }
-                '*' => {
-                    tokens.push(Token::Star);
-                    i += 1;
-                }
-                '/' => {
-                    tokens.push(Token::Slash);
-                    i += 1;
-                }
-                '\\' => {
-                    tokens.push(Token::Backslash);
-                    i += 1;
-                }
-                '^' => {
-                    tokens.push(Token::Caret);
-                    i += 1;
-                }
-                '(' => {
-                    tokens.push(Token::LParen);
-                    i += 1;
-                }
-                ')' => {
-                    tokens.push(Token::RParen);
-                    i += 1;
-                }
-                ',' => {
-                    tokens.push(Token::Comma);
-                    i += 1;
-                }
-                ';' => {
-                    tokens.push(Token::Semicolon);
-                    i += 1;
-                }
-                ':' => {
-                    tokens.push(Token::Colon);
-                    i += 1;
-                }
-                '.' => {
-                    tokens.push(Token::Dot);
-                    i += 1;
-                }
-                '<' => {
-                    if i + 1 < chars.len() && chars[i + 1] == '=' {
-                        tokens.push(Token::LessEqual);
-                        i += 2;
-                    } else if i + 1 < chars.len() && chars[i + 1] == '>' {
-                        tokens.push(Token::NotEqual);
-                        i += 2;
-                    } else {
-                        tokens.push(Token::Less);
-                        i += 1;
-                    }
-                }
-                '>' => {
-                    if i + 1 < chars.len() && chars[i + 1] == '=' {
-                        tokens.push(Token::GreaterEqual);
-                        i += 2;
-                    } else {
-                        tokens.push(Token::Greater);
-                        i += 1;
-                    }
-                }
-                _ => return Err(format!("Unexpected character '{}'", c)),
-            }
-        }
+        chars.extend(raw_line.trim_end().chars());
+        tokenize_line(&chars, &mut tokens).map_err(|e| format!("Line {}: {}", line_idx + 1, e))?;
         tokens.push(Token::Newline);
     }
     tokens.push(Token::Eof);
     Ok(tokens)
 }
 
+fn tokenize_line(chars: &[char], tokens: &mut Vec<Token>) -> Result<(), String> {
+    let mut i = 0;
+    // Number of tokens emitted on this line, used to recognise line numbers
+    // and labels, which are only valid at the start of a line.
+    let line_start = tokens.len();
+    while i < chars.len() {
+        let c = chars[i];
+        if c == ' ' || c == '\t' {
+            i += 1;
+            continue;
+        }
+        let at_line_start = tokens.len() == line_start;
+        let only_line_number =
+            tokens.len() == line_start + 1 && matches!(tokens[line_start], Token::LineNumber(_));
+        if at_line_start && c.is_ascii_digit() {
+            let start = i;
+            while i < chars.len() && chars[i].is_ascii_digit() {
+                i += 1;
+            }
+            let s: String = chars[start..i].iter().collect();
+            let n: u32 = s
+                .parse()
+                .map_err(|_| format!("Line number {} is too large", s))?;
+            tokens.push(Token::LineNumber(n));
+            continue;
+        }
+        if c == '\'' {
+            break;
+        }
+        if c == '#' {
+            tokens.push(Token::Hash);
+            i += 1;
+            continue;
+        }
+        if c == '?' {
+            tokens.push(Token::Print);
+            i += 1;
+            continue;
+        }
+        if c == '&'
+            && i + 1 < chars.len()
+            && matches!(chars[i + 1], 'h' | 'H' | 'o' | 'O' | 'b' | 'B')
+        {
+            let radix = match chars[i + 1].to_ascii_uppercase() {
+                'H' => 16,
+                'O' => 8,
+                _ => 2,
+            };
+            i += 2;
+            let start = i;
+            while i < chars.len() && chars[i].is_digit(radix) {
+                i += 1;
+            }
+            let s: String = chars[start..i].iter().collect();
+            if s.is_empty() {
+                return Err("Expected digits after '&' prefix".to_string());
+            }
+            let n = i64::from_str_radix(&s, radix)
+                .map_err(|_| format!("Number '&{}' is too large", s))?;
+            // Optional type suffix (&H7FFF%, &HFFFF&).
+            if i < chars.len() && matches!(chars[i], '%' | '&') {
+                i += 1;
+            }
+            tokens.push(Token::Number(n as f64));
+            continue;
+        }
+        if c.is_ascii_digit() || (c == '.' && i + 1 < chars.len() && chars[i + 1].is_ascii_digit())
+        {
+            let (n, next) = lex_number(chars, i)?;
+            i = next;
+            tokens.push(Token::Number(n));
+            continue;
+        }
+        if c == '"' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && chars[i] != '"' {
+                i += 1;
+            }
+            if i >= chars.len() {
+                return Err("Unterminated string (missing closing \")".to_string());
+            }
+            let s: String = chars[start..i].iter().collect();
+            i += 1;
+            tokens.push(Token::StringLit(s));
+            continue;
+        }
+        if c.is_ascii_alphabetic() || c == '_' {
+            let start = i;
+            while i < chars.len() && (chars[i].is_ascii_alphanumeric() || chars[i] == '_') {
+                i += 1;
+            }
+            if i < chars.len() && matches!(chars[i], '$' | '%' | '!' | '#' | '&') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let upper = word.to_uppercase();
+            if upper == "REM" {
+                break;
+            }
+            let is_label = (at_line_start || only_line_number)
+                && i < chars.len()
+                && chars[i] == ':'
+                && !is_keyword(&upper);
+            if is_label {
+                i += 1;
+                tokens.push(Token::Label(upper));
+                continue;
+            }
+            if upper == "DATA" {
+                tokens.push(Token::Data);
+                let (items, next) = lex_data_items(chars, i);
+                tokens.push(Token::DataItems(items));
+                i = next;
+                continue;
+            }
+            if upper == "END" {
+                let mut j = i;
+                while j < chars.len() && (chars[j] == ' ' || chars[j] == '\t') {
+                    j += 1;
+                }
+                let follows = |word: &str| {
+                    let len = word.len();
+                    j + len <= chars.len()
+                        && chars[j..j + len]
+                            .iter()
+                            .zip(word.chars())
+                            .all(|(a, b)| a.to_ascii_uppercase() == b)
+                        && (j + len >= chars.len()
+                            || !(chars[j + len].is_ascii_alphanumeric() || chars[j + len] == '_'))
+                };
+                let compound = [
+                    ("IF", Token::EndIf),
+                    ("SUB", Token::EndSub),
+                    ("FUNCTION", Token::EndFunction),
+                    ("TYPE", Token::EndType),
+                    ("SELECT", Token::EndSelect),
+                ]
+                .into_iter()
+                .find(|(w, _)| follows(w));
+                match compound {
+                    Some((w, tok)) => {
+                        i = j + w.len();
+                        tokens.push(tok);
+                    }
+                    None => tokens.push(Token::End),
+                }
+                continue;
+            }
+            tokens.push(keyword_token(&upper).unwrap_or(Token::Identifier(upper)));
+            continue;
+        }
+        let (tok, len) = match c {
+            '=' => (Token::Equals, 1),
+            '+' => (Token::Plus, 1),
+            '-' => (Token::Minus, 1),
+            '*' => (Token::Star, 1),
+            '/' => (Token::Slash, 1),
+            '\\' => (Token::Backslash, 1),
+            '^' => (Token::Caret, 1),
+            '(' => (Token::LParen, 1),
+            ')' => (Token::RParen, 1),
+            ',' => (Token::Comma, 1),
+            ';' => (Token::Semicolon, 1),
+            ':' => (Token::Colon, 1),
+            '.' => (Token::Dot, 1),
+            '<' if chars.get(i + 1) == Some(&'=') => (Token::LessEqual, 2),
+            '<' if chars.get(i + 1) == Some(&'>') => (Token::NotEqual, 2),
+            '<' => (Token::Less, 1),
+            '>' if chars.get(i + 1) == Some(&'=') => (Token::GreaterEqual, 2),
+            '>' => (Token::Greater, 1),
+            _ => return Err(format!("Unexpected character '{}'", c)),
+        };
+        tokens.push(tok);
+        i += len;
+    }
+    Ok(())
+}
+
+/// Lex a decimal number with optional fraction, exponent (`E` or `D`) and
+/// type suffix (`%`, `&`, `!`, `#`). Returns the value and the next index.
+fn lex_number(chars: &[char], mut i: usize) -> Result<(f64, usize), String> {
+    let start = i;
+    let mut saw_dot = false;
+    while i < chars.len() && (chars[i].is_ascii_digit() || (chars[i] == '.' && !saw_dot)) {
+        if chars[i] == '.' {
+            saw_dot = true;
+        }
+        i += 1;
+    }
+    let mut text: String = chars[start..i].iter().collect();
+    if i < chars.len() && matches!(chars[i], 'e' | 'E' | 'd' | 'D') {
+        let mut j = i + 1;
+        if j < chars.len() && matches!(chars[j], '+' | '-') {
+            j += 1;
+        }
+        if j < chars.len() && chars[j].is_ascii_digit() {
+            text.push('e');
+            text.extend(&chars[i + 1..j]);
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                text.push(chars[j]);
+                j += 1;
+            }
+            i = j;
+        }
+    }
+    if i < chars.len() && matches!(chars[i], '%' | '&' | '!' | '#') {
+        i += 1;
+    }
+    let n: f64 = text.parse().map_err(|_| format!("Bad number '{}'", text))?;
+    if !n.is_finite() {
+        return Err(format!("Number '{}' is too large", text));
+    }
+    Ok((n, i))
+}
+
+/// Split the remainder of a `DATA` statement into items. Items are separated
+/// by commas; quoted items keep their exact text, unquoted items are trimmed
+/// but keep their case. The statement ends at an unquoted colon or the end of
+/// the line.
+fn lex_data_items(chars: &[char], mut i: usize) -> (Vec<(String, bool)>, usize) {
+    let mut items = Vec::new();
+    loop {
+        while i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+            i += 1;
+        }
+        if i < chars.len() && chars[i] == '"' {
+            i += 1;
+            let start = i;
+            while i < chars.len() && chars[i] != '"' {
+                i += 1;
+            }
+            items.push((chars[start..i].iter().collect(), true));
+            if i < chars.len() {
+                i += 1;
+            }
+            while i < chars.len() && !matches!(chars[i], ',' | ':') {
+                i += 1;
+            }
+        } else {
+            let start = i;
+            while i < chars.len() && !matches!(chars[i], ',' | ':') {
+                i += 1;
+            }
+            let text: String = chars[start..i].iter().collect();
+            items.push((text.trim().to_string(), false));
+        }
+        if i < chars.len() && chars[i] == ',' {
+            i += 1;
+            continue;
+        }
+        break;
+    }
+    if items.len() == 1 && !items[0].1 && items[0].0.is_empty() {
+        items.clear();
+    }
+    (items, i)
+}
+
+fn keyword_token(upper: &str) -> Option<Token> {
+    Some(match upper {
+        "PRINT" => Token::Print,
+        "LET" => Token::Let,
+        "INPUT" => Token::Input,
+        "IF" => Token::If,
+        "THEN" => Token::Then,
+        "ELSE" => Token::Else,
+        "ELSEIF" => Token::ElseIf,
+        "ENDIF" => Token::EndIf,
+        "FOR" => Token::For,
+        "TO" => Token::To,
+        "STEP" => Token::Step,
+        "NEXT" => Token::Next,
+        "WHILE" => Token::While,
+        "WEND" => Token::Wend,
+        "DO" => Token::Do,
+        "LOOP" => Token::Loop,
+        "UNTIL" => Token::Until,
+        "GOTO" => Token::Goto,
+        "GOSUB" => Token::Gosub,
+        "RETURN" => Token::Return,
+        "DIM" => Token::Dim,
+        "READ" => Token::Read,
+        "RESTORE" => Token::Restore,
+        "REDIM" => Token::Redim,
+        "PRESERVE" => Token::Preserve,
+        "ERASE" => Token::Erase,
+        "AS" => Token::As,
+        "INTEGER" => Token::Integer,
+        "LONG" => Token::Long,
+        "SINGLE" => Token::Single,
+        "DOUBLE" => Token::Double,
+        "STRING" => Token::StringKw,
+        "SUB" => Token::Sub,
+        "FUNCTION" => Token::Function,
+        "CALL" => Token::Call,
+        "DECLARE" => Token::Declare,
+        "EXIT" => Token::Exit,
+        "BYREF" => Token::ByRef,
+        "BYVAL" => Token::ByVal,
+        "SHARED" => Token::Shared,
+        "STATIC" => Token::Static,
+        "CONST" => Token::Const,
+        "TYPE" => Token::Type,
+        "OPTION" => Token::Option,
+        "BASE" => Token::Base,
+        "DEFINT" => Token::DefInt,
+        "DEFLNG" => Token::DefLng,
+        "DEFSNG" => Token::DefSng,
+        "DEFDBL" => Token::DefDbl,
+        "DEFSTR" => Token::DefStr,
+        "SELECT" => Token::Select,
+        "CASE" => Token::Case,
+        "IS" => Token::Is,
+        "OPEN" => Token::Open,
+        "CLOSE" => Token::Close,
+        "OUTPUT" => Token::Output,
+        "APPEND" => Token::Append,
+        "RANDOM" => Token::Random,
+        "GET" => Token::Get,
+        "PUT" => Token::Put,
+        "LEN" => Token::LenKw,
+        "SCREEN" => Token::Screen,
+        "LINE" => Token::Line,
+        "CIRCLE" => Token::Circle,
+        "PSET" => Token::Pset,
+        "COLOR" => Token::Color,
+        "CLS" => Token::Cls,
+        "WINDOW" => Token::Window,
+        "PAINT" => Token::Paint,
+        "LOCATE" => Token::Locate,
+        "BEEP" => Token::Beep,
+        "SWAP" => Token::Swap,
+        "CLEAR" => Token::Clear,
+        "STOP" => Token::Stop,
+        "SYSTEM" => Token::System,
+        "ON" => Token::On,
+        "ERROR" => Token::Error,
+        "RESUME" => Token::Resume,
+        "USING" => Token::Using,
+        "WRITE" => Token::Write,
+        "KILL" => Token::Kill,
+        "MOD" => Token::Mod,
+        "AND" => Token::And,
+        "OR" => Token::Or,
+        "NOT" => Token::Not,
+        "XOR" => Token::Xor,
+        "RANDOMIZE" => Token::Randomize,
+        "SLEEP" => Token::Sleep,
+        _ => return None,
+    })
+}
+
 pub fn is_keyword(s: &str) -> bool {
-    matches!(
-        s,
-        "PRINT"
-            | "LET"
-            | "INPUT"
-            | "IF"
-            | "THEN"
-            | "ELSE"
-            | "ELSEIF"
-            | "ENDIF"
-            | "FOR"
-            | "TO"
-            | "STEP"
-            | "NEXT"
-            | "WHILE"
-            | "WEND"
-            | "DO"
-            | "LOOP"
-            | "UNTIL"
-            | "GOTO"
-            | "GOSUB"
-            | "RETURN"
-            | "END"
-            | "REM"
-            | "DIM"
-            | "DATA"
-            | "READ"
-            | "RESTORE"
-            | "REDIM"
-            | "PRESERVE"
-            | "ERASE"
-            | "AS"
-            | "INTEGER"
-            | "LONG"
-            | "SINGLE"
-            | "DOUBLE"
-            | "STRING"
-            | "SUB"
-            | "FUNCTION"
-            | "CALL"
-            | "DECLARE"
-            | "EXIT"
-            | "BYREF"
-            | "BYVAL"
-            | "SHARED"
-            | "STATIC"
-            | "CONST"
-            | "TYPE"
-            | "OPTION"
-            | "BASE"
-            | "DEFINT"
-            | "DEFLNG"
-            | "DEFSNG"
-            | "DEFDBL"
-            | "DEFSTR"
-            | "SELECT"
-            | "CASE"
-            | "IS"
-            | "OPEN"
-            | "CLOSE"
-            | "OUTPUT"
-            | "APPEND"
-            | "RANDOM"
-            | "GET"
-            | "PUT"
-            | "LEN"
-            | "SCREEN"
-            | "LINE"
-            | "CIRCLE"
-            | "PSET"
-            | "COLOR"
-            | "CLS"
-            | "WINDOW"
-            | "PAINT"
-            | "LOCATE"
-            | "BEEP"
-            | "SWAP"
-            | "CLEAR"
-            | "STOP"
-            | "SYSTEM"
-            | "ON"
-            | "ERROR"
-            | "RESUME"
-            | "MOD"
-            | "AND"
-            | "OR"
-            | "NOT"
-            | "XOR"
-            | "RANDOMIZE"
-            | "SLEEP"
-    )
+    matches!(s, "END" | "REM" | "DATA") || keyword_token(s).is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(src: &str) -> Vec<Token> {
+        tokenize(src).unwrap()
+    }
+
+    #[test]
+    fn colon_after_variable_is_a_separator_not_a_label() {
+        assert_eq!(
+            toks("PRINT A: PRINT A"),
+            vec![
+                Token::Print,
+                Token::Identifier("A".into()),
+                Token::Colon,
+                Token::Print,
+                Token::Identifier("A".into()),
+                Token::Newline,
+                Token::Eof
+            ]
+        );
+    }
+
+    #[test]
+    fn labels_only_at_line_start() {
+        assert_eq!(toks("start: X = 1")[0], Token::Label("START".into()));
+        assert_eq!(toks("10 again: PRINT")[1], Token::Label("AGAIN".into()));
+    }
+
+    #[test]
+    fn exponent_hex_and_suffix_literals() {
+        assert_eq!(toks("? 1E5")[1], Token::Number(100000.0));
+        assert_eq!(toks("? 2.5D-1")[1], Token::Number(0.25));
+        assert_eq!(toks("&HFF")[0], Token::Number(255.0));
+        assert_eq!(toks("&O17")[0], Token::Number(15.0));
+        assert_eq!(toks("&B101")[0], Token::Number(5.0));
+        assert_eq!(toks("X = 5#")[2], Token::Number(5.0));
+        // E followed by a letter is not an exponent.
+        assert_eq!(toks("? 1ELSE")[1..3], [Token::Number(1.0), Token::Else]);
+    }
+
+    #[test]
+    fn question_mark_is_print() {
+        assert_eq!(toks("? 1")[0], Token::Print);
+    }
+
+    #[test]
+    fn data_items_keep_case_and_spaces() {
+        assert_eq!(
+            toks("DATA New York, \"a, b\", 5 : PRINT")[..4],
+            [
+                Token::Data,
+                Token::DataItems(vec![
+                    ("New York".into(), false),
+                    ("a, b".into(), true),
+                    ("5".into(), false)
+                ]),
+                Token::Colon,
+                Token::Print
+            ]
+        );
+    }
+
+    #[test]
+    fn errors_report_line_numbers() {
+        let err = tokenize("PRINT 1\nPRINT \"oops\n").unwrap_err();
+        assert!(err.starts_with("Line 2:"), "{}", err);
+    }
+
+    #[test]
+    fn end_compounds() {
+        assert_eq!(toks("END IF")[0], Token::EndIf);
+        assert_eq!(toks("end   select")[0], Token::EndSelect);
+        assert_eq!(toks("END")[0], Token::End);
+        assert_eq!(toks("END IFFY")[0], Token::End);
+    }
 }

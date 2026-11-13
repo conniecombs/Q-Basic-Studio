@@ -1,0 +1,2 @@
+PRINT "start"
+PRNT "typo"

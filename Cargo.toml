@@ -1,9 +1,15 @@
 [package]
 name = "qbasic_interpreter"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
-rust-version = "1.82"
+# Lowest version the locked dependency tree builds with (checked in CI).
+rust-version = "1.88"
 description = "A terminal IDE and interpreter for a practical QBasic-inspired BASIC dialect."
+license = "MIT"
+repository = "https://github.com/conniecombs/Q-Basic-Studio"
+readme = "README.md"
+keywords = ["basic", "qbasic", "interpreter", "ide", "retro"]
+categories = ["command-line-utilities", "development-tools", "compilers"]
 
 [dependencies]
 minifb = "0.25"
