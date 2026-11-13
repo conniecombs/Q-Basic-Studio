@@ -29,15 +29,13 @@ By the end, you should be comfortable with:
 
 From the project folder, run:
 
-```powershell
+```sh
 cargo run
 ```
 
-If you already built the release executable, you can also run:
-
-```powershell
-target\release\qbasic_interpreter.exe
-```
+If you already built the release executable with `cargo build --release`, you
+can also run it directly: `target/release/qbasic_interpreter` (on Windows,
+`target\release\qbasic_interpreter.exe`).
 
 The IDE has three main areas:
 
@@ -59,11 +57,20 @@ virtual line numbers when you run from the IDE.
 | `F12` | Save as |
 | `F3`, `Ctrl+O` | Open |
 | `Ctrl+N` | Start a new program |
+| `Shift`+arrows | Select text |
 | `Ctrl+C`, `Ctrl+X`, `Ctrl+V` | Copy, cut, paste |
+| `Ctrl+U` | Undo |
 | `Esc`, `Ctrl+Q` | Quit |
 
 When you press `F5`, your BASIC program opens in its own program window. This
 keeps the IDE usable if your program waits for input or gets stuck in a loop.
+On macOS, or when there is no desktop (for example over SSH), the program runs
+full-screen in the same terminal instead and the editor comes back when it
+ends.
+
+If a program gets stuck, press `Ctrl+C` in its window to stop it. The IDE asks
+before quitting, opening another file or starting a new one if you have unsaved
+changes.
 
 ## 3. Your First Program
 
@@ -563,14 +570,31 @@ Graphics basics:
 
 - `SCREEN 12` starts a graphics screen.
 - `CLS` clears it.
-- `COLOR foreground, background` changes text colors.
+- `COLOR foreground, background` changes the drawing colors (without a
+  `SCREEN`, it changes the text colors instead).
 - `PSET (x, y), color` draws one pixel.
 - `LINE (x1, y1)-(x2, y2), color` draws a line.
 - `LINE ..., B` draws a box.
 - `LINE ..., BF` draws a filled box.
 - `CIRCLE (x, y), radius, color` draws a circle.
 - `PAINT (x, y), fill, border` fills an area.
-- `SLEEP 3` waits three seconds before the program ends.
+- `SLEEP 3` waits three seconds (or until a key is pressed).
+
+Drawing commands need a `SCREEN` first; without one you get
+"Illegal function call". When the program ends, the graphics window stays open
+until you press a key in it. Keys pressed in the graphics window reach
+`INKEY$`, so you can write simple games:
+
+```basic
+SCREEN 13
+X = 160
+DO
+    K$ = INKEY$
+    IF K$ = CHR$(0) + "K" THEN X = X - 4   ' left arrow
+    IF K$ = CHR$(0) + "M" THEN X = X + 4   ' right arrow
+    PSET (X, 100), 14
+LOOP UNTIL K$ = CHR$(27)                   ' Esc quits
+```
 
 Try changing the numbers. Coordinates start near the top-left corner.
 
@@ -582,10 +606,18 @@ Common messages:
 
 | Message kind | What it usually means |
 | --- | --- |
-| Lexer error | The editor found a character or string it cannot tokenize |
-| Syntax error | The code shape is not valid BASIC |
+| Syntax error | The code is not valid BASIC, so it did not start |
 | Runtime error | The program started, but something went wrong while running |
 | Program exited | The separate run window ended with an error code |
+
+Every message says which line is wrong, for example
+`Syntax error: Line 4: FOR without NEXT`. When you press `F5` and there is a
+syntax error, the cursor jumps to that line. Runtime errors also show the
+gutter number, for example `Line 3 (BASIC line 30): Division by zero`.
+
+Some mistakes are caught before the program runs at all: misspelled
+statements (`PRNT`), a `GOTO` to a label that does not exist, and adding a
+number to a string.
 
 Good debugging habits:
 
@@ -744,8 +776,9 @@ END FUNCTION
 | Built-in | Purpose |
 | --- | --- |
 | `INT(N)` | Whole-number floor |
-| `RND()` | Random number from 0 to 1 |
-| `TIMER()` | Seconds since midnight |
+| `RND` | Random number from 0 to 1 |
+| `TIMER` | Seconds since midnight (UTC) |
+| `INKEY$` | The key being pressed, or `""` |
 | `LEN(S$)` | String length |
 | `LEFT$(S$, N)` | Left part of string |
 | `RIGHT$(S$, N)` | Right part of string |
@@ -755,7 +788,8 @@ END FUNCTION
 | `VAL(S$)` | Convert string to number |
 | `STR$(N)` | Convert number to string |
 
-Function-like built-ins use parentheses, such as `RND()` and `TIMER()`.
+Built-ins that take no arguments, such as `RND`, `TIMER` and `INKEY$`, work
+with or without parentheses: `RND` and `RND()` are the same.
 
 ## What To Learn Next
 
