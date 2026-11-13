@@ -1,0 +1,12 @@
+PRINT 0.1 + 0.2, 1 / 3, 2 ^ 3 ^ 2, -2 ^ 2
+PRINT 1E5, 2.5D-1, &HFF, &O17, &B101, 7#
+PRINT 1E300, 1.5E-07
+DIM I AS INTEGER
+I = 3.7: A% = 7 / 2: B% = 5 / 2: C& = 100000
+PRINT I, A%, B%, C&
+PRINT 7 \ 2, -7 \ 2, 7 MOD 3, -7 MOD 3, 5 \ 0.6
+PRINT INT(-2.5), FIX(-2.5), CINT(2.5), CINT(3.5), ABS(-4), SGN(-3)
+PRINT 5 AND 3, 5 OR 3, 5 XOR 3, NOT 0
+PRINT STR$(42), STR$(-42), VAL("  12.5abc"), VAL("&H10")
+PRINT HEX$(255), HEX$(-1), OCT$(8)
+PRINT SQR(16), LOG(EXP(2)), ATN(1) * 4

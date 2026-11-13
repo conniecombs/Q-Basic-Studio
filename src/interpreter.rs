@@ -85,6 +85,11 @@ pub enum ConsoleMsg {
         fg: Option<u8>,
         bg: Option<u8>,
     },
+    /// Move the text cursor (1-based); `None` keeps that coordinate.
+    Locate {
+        row: Option<u16>,
+        col: Option<u16>,
+    },
 }
 
 /// Channels and shared state connecting the interpreter to its front end.
@@ -775,6 +780,10 @@ impl Interpreter {
         labels: Option<&HashMap<String, usize>>,
         start: usize,
     ) -> Result<Flow, String> {
+        // Checked here too so that empty loops (`DO: LOOP`) can be stopped.
+        if self.io.cancel.load(Ordering::Relaxed) {
+            return Err(INTERRUPTED.to_string());
+        }
         let mut pc = start;
         while pc < body.len() {
             match self.exec_guarded(&body[pc])? {
@@ -2343,21 +2352,15 @@ impl Interpreter {
                         "Illegal function call: LOCATE row and column must be 1-255".to_string()
                     );
                 }
-                let seq = match (r, c) {
-                    (Some(r), Some(c)) => format!("\x1B[{};{}H", r, c),
-                    (Some(r), None) => format!("\x1B[{}d", r),
-                    (None, Some(c)) => format!("\x1B[{}G", c),
-                    (None, None) => String::new(),
-                };
                 if let Some(r) = r {
                     self.cursor_row = r as usize;
                 }
                 if let Some(c) = c {
                     self.cursor_col = c as usize - 1;
                 }
-                let _ = self.io.console_tx.send(ConsoleMsg::Print {
-                    text: seq,
-                    newline: false,
+                let _ = self.io.console_tx.send(ConsoleMsg::Locate {
+                    row: r.map(|r| r as u16),
+                    col: c.map(|c| c as u16),
                 });
             }
             _ => {}

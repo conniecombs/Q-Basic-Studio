@@ -1157,6 +1157,8 @@ fn console_loop(
     raw: bool,
 ) {
     let mut out = io::stdout();
+    // Escape sequences only make sense on a terminal; keep piped output clean.
+    let ansi = out.is_terminal();
     let mut input_tx = Some(input_tx);
     let mut line: Option<String> = None;
     let mut colored = false;
@@ -1181,8 +1183,15 @@ fn console_loop(
                     let mut buf = String::new();
                     match io::stdin().read_line(&mut buf) {
                         Ok(n) if n > 0 => {
+                            let text = buf.trim_end_matches(['\r', '\n']).to_string();
+                            // Piped input is not echoed by a terminal; show it
+                            // so transcripts read like an interactive session.
+                            if !io::stdin().is_terminal() {
+                                let _ = writeln!(out, "{}", text);
+                                let _ = out.flush();
+                            }
                             if let Some(tx) = &input_tx {
-                                let _ = tx.send(buf.trim_end_matches(['\r', '\n']).to_string());
+                                let _ = tx.send(text);
                             }
                         }
                         // End of input: let the program see "Input past end".
@@ -1190,11 +1199,20 @@ fn console_loop(
                     }
                 }
             }
-            Ok(ConsoleMsg::Clear) => {
+            Ok(ConsoleMsg::Clear) if ansi => {
                 let _ = write!(out, "\x1B[2J\x1B[1;1H");
                 let _ = out.flush();
             }
-            Ok(ConsoleMsg::Color { fg, bg }) => {
+            Ok(ConsoleMsg::Locate { row, col }) if ansi => {
+                let _ = match (row, col) {
+                    (Some(r), Some(c)) => write!(out, "\x1B[{};{}H", r, c),
+                    (Some(r), None) => write!(out, "\x1B[{}d", r),
+                    (None, Some(c)) => write!(out, "\x1B[{}G", c),
+                    (None, None) => Ok(()),
+                };
+                let _ = out.flush();
+            }
+            Ok(ConsoleMsg::Color { fg, bg }) if ansi => {
                 colored = true;
                 if let Some(fg) = fg {
                     let (c, bright) = ansi_color(fg % 16);
@@ -1206,6 +1224,7 @@ fn console_loop(
                 }
                 let _ = out.flush();
             }
+            Ok(ConsoleMsg::Clear | ConsoleMsg::Locate { .. } | ConsoleMsg::Color { .. }) => {}
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
